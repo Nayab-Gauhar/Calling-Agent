@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: ai-calling-agent-mcp
+    runtime: python
+    plan: starter
+    buildCommand: bash install_deps.sh
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PORT
+        value: 8000
