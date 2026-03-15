@@ -2,13 +2,14 @@
 Real-time Speech-to-Text using Deepgram's WebSocket streaming API.
 Receives raw audio from Twilio Media Streams and returns transcripts.
 Includes auto-reconnect and optimized VAD for low latency.
+Supports multilingual (Hindi + English) recognition.
 Compatible with websockets v16+.
 """
 
 import json
 import asyncio
 import websockets
-from config import DEEPGRAM_API_KEY, DEEPGRAM_ENDPOINTING_MS
+from config import DEEPGRAM_API_KEY, DEEPGRAM_ENDPOINTING_MS, DEEPGRAM_LANGUAGE
 
 DEEPGRAM_WS_URL = "wss://api.deepgram.com/v1/listen"
 MAX_RECONNECT_ATTEMPTS = 5
@@ -18,16 +19,20 @@ RECONNECT_DELAY_S = 1.0
 class DeepgramSTT:
     """Manages a persistent WebSocket connection to Deepgram for real-time STT."""
 
-    def __init__(self, on_transcript_callback, sample_rate=8000, encoding="mulaw", channels=1):
+    def __init__(self, on_transcript_callback, language=None, sample_rate=8000, encoding="mulaw", channels=1):
         """
         Args:
             on_transcript_callback: async function called with (transcript: str) when
                                     a final transcript is received.
+            language: Primary language for recognition. Use "hi" for Hindi,
+                      "multi" for automatic multi-language detection,
+                      or "en" for English-only. Defaults to config value.
             sample_rate: Audio sample rate (Twilio sends 8000 Hz).
             encoding: Audio encoding (Twilio sends mulaw).
             channels: Number of audio channels.
         """
         self.on_transcript = on_transcript_callback
+        self.language = language or DEEPGRAM_LANGUAGE
         self.sample_rate = sample_rate
         self.encoding = encoding
         self.channels = channels
@@ -42,6 +47,9 @@ class DeepgramSTT:
             f"?encoding={self.encoding}"
             f"&sample_rate={self.sample_rate}"
             f"&channels={self.channels}"
+            f"&language={self.language}"
+            f"&model=nova-2"
+            f"&smart_format=true"
             f"&punctuate=true"
             f"&interim_results=true"
             f"&endpointing={DEEPGRAM_ENDPOINTING_MS}"

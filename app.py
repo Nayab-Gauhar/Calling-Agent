@@ -1,6 +1,6 @@
 """
 AI Calling Agent — Real-Time Voice Agent
-Uses FastAPI + Twilio Media Streams + Deepgram STT + Gemini LLM + ElevenLabs TTS
+Uses FastAPI + Twilio Media Streams + Deepgram STT + Groq LLM + Sarvam TTS
 for human-like, low-latency phone conversations with barge-in support.
 """
 
@@ -8,7 +8,7 @@ import json
 import base64
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -147,8 +147,8 @@ async def media_stream(websocket: WebSocket):
 
     Flow:
     1. Twilio sends raw audio → Deepgram STT (real-time transcription)
-    2. Transcript → OpenAI LLM (streaming response)
-    3. LLM text chunks → ElevenLabs TTS (streaming audio)
+    2. Transcript → Groq LLM (streaming response)
+    3. LLM text chunks → Sarvam TTS (streaming audio)
     4. TTS audio → Twilio (plays to caller)
 
     Barge-in: If the user speaks while AI is responding, the current
@@ -161,7 +161,7 @@ async def media_stream(websocket: WebSocket):
     stream_sid = None
     caller_number = "unknown"
     call_direction = "unknown"
-    call_start_time = datetime.utcnow()
+    call_start_time = datetime.now(timezone.utc)
 
     # Barge-in state
     current_processing_task = None
@@ -199,8 +199,7 @@ async def media_stream(websocket: WebSocket):
             except Exception:
                 pass  # WebSocket may have closed
 
-    # Global TTS instance (since it holds a long-lived ws session)
-    global tts
+    # TTS instance scoped to this session (not global to avoid concurrency issues)
     tts = SarvamTTS(send_to_twilio, language="hi-IN", speaker="shreya", model="bulbul:v3")
 
     # ── Process a transcript through the full pipeline ──
@@ -354,7 +353,7 @@ async def media_stream(websocket: WebSocket):
         await tts.close()
 
         # Save call log
-        call_end_time = datetime.utcnow()
+        call_end_time = datetime.now(timezone.utc)
         await save_call_log({
             "caller_number": caller_number,
             "direction": call_direction,

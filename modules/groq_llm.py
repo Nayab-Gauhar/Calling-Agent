@@ -5,20 +5,19 @@ for efficient, low-latency TTS processing. Supports cancellation for barge-in.
 """
 
 import asyncio
-import os
 from groq import AsyncGroq
-from config import GROQ_API_KEY, SYSTEM_PROMPT, LLM_MAX_TOKENS
-
-# Define GROQ_MODEL here, overriding the config import if it existed
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+from config import GROQ_API_KEY, GROQ_MODEL, SYSTEM_PROMPT, LLM_MAX_TOKENS
 
 # Initialize the Groq client
 client = AsyncGroq(api_key=GROQ_API_KEY)
 
-# Characters that indicate a natural pause — good point to flush to TTS
-FLUSH_CHARS = {'.', '!', '?', ':', ';', ','}
-# Minimum chunk size before we consider flushing to TTS
-MIN_CHUNK_SIZE = 8
+# Characters that indicate a natural pause — good point to flush to TTS.
+# Includes Hindi danda (।) and double-danda (॥) which are sentence terminators,
+# and em-dash / en-dash which LLMs frequently produce.
+FLUSH_CHARS = {'.', '!', '?', ':', ';', ',', '।', '॥', '—', '–'}
+# Minimum chunk size (in chars) before we consider flushing to TTS.
+# Lower = faster time-to-first-audio, but too-short chunks sound choppy.
+MIN_CHUNK_SIZE = 6
 
 
 class GroqLLM:

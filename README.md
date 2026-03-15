@@ -1,80 +1,105 @@
-# AI Calling Agent using twilio and openai
+# AI Calling Agent — Real-Time Voice Agent
 
-The AI Calling Agent is an innovative solution designed to automate both inbound and outbound calling processes, currently tailored as a mental health consultant. This project leverages a combination of cutting-edge technologies including Twilio for call handling, OpenAI for intelligent conversation, Pinecone for vector database services, and MongoDB for data persistence.
+A real-time AI-powered voice phone agent built with Python. It conducts automated, human-like phone conversations by piping audio through a low-latency streaming pipeline:
+
+```
+Caller (Phone) <-> Twilio <-> FastAPI WebSocket <-> Deepgram STT -> Groq LLM -> Sarvam TTS -> Caller
+```
 
 ## Features
 
-- **Inbound and Outbound Calls:** Handles both incoming and outgoing calls efficiently using Twilio.
-- **AI-Powered Conversations:** Integrates OpenAI to provide responsive and context-aware interactions.
-- **Data Handling:** Utilizes MongoDB for robust data management and Pinecone for querying capabilities.
-- **Real-Time Response:** Employs Text-to-Speech (TTS) and Speech-to-Text (STT) for real-time communication.
+- **Inbound & Outbound Calls** via Twilio Media Streams
+- **Real-Time Streaming Pipeline** — STT, LLM, and TTS all operate over async streams for minimal latency
+- **Barge-In Support** — caller can interrupt the AI mid-sentence; the system cancels generation and processes new input immediately
+- **Conversation Persistence** — chat history stored in MongoDB, last 10 messages loaded as LLM context
+- **Call Logging** — each call's metadata (caller, direction, duration) saved to MongoDB
+- **Pluggable Providers** — swappable STT/LLM/TTS modules (see below)
+- **Bilingual Hindi/English** — configured for Devanagari Hindi with English loan words via Sarvam AI TTS
 
-## Getting Started
+## Active Stack
 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
+| Component | Provider | Model |
+|-----------|----------|-------|
+| **STT** | Deepgram | WebSocket streaming |
+| **LLM** | Groq | Llama 3.1 8B Instant |
+| **TTS** | Sarvam AI | Bulbul v3 (Hindi) |
 
-## Prerequsit
-Fill the env and config file.
+### Alternative Providers (swap in `app.py`)
 
-### Installing
-
-A step by step series of examples that tell you how to get a development environment running:
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/revolutionarybukhari/ai-calling-agent.git
-   ```
-2. Navigate to the project directory:
-   ```bash
-   cd ai-calling-agent
-   ```
-3. Install required packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
-4. Run the application:
-   ```bash
-   python app.py
-   ```
-
-## Usage
-
-After starting the server, the application will be available on `http://localhost:5000/`. Use the following endpoints to interact with the AI calling agent:
-
-- **GET /** - Test the connection and retrieve API status.
-- **POST /voice** - Handle incoming calls.
-- **GET /make_call?phone_number=+1234567890** - Initiate an outbound call to the specified number.
-- **POST /handle_speech** - Process user speech from an ongoing call.
+| Component | Alternative | Module |
+|-----------|-------------|--------|
+| **LLM** | Google Gemini | `modules/gemini_llm.py` |
+| **TTS** | Deepgram Aura | `modules/deepgram_tts.py` |
+| **TTS** | ElevenLabs | `modules/elevenlabs_tts.py` |
 
 ## Project Structure
 
 ```
-/ai-calling-agent
-│
-├── app.py                # Flask application entry point
-├── /modules              # Modular functionalities
-│   ├── agent_tools.py
-│   ├── chatbot.py
-│   ├── mongodb.py
-│   ├── sender.py
-│   ├── tts.py
-│   └── twilio_api.py
-└── /static               # Static files directory
+ai-calling-agent/
+├── app.py                      # FastAPI entry point, routes, WebSocket handler
+├── config.py                   # Environment variable loader
+├── system_prompt.txt           # LLM system prompt
+├── requirements.txt            # Python dependencies
+├── .env.example                # Environment variable template
+├── modules/
+│   ├── deepgram_stt.py         # Speech-to-Text (Deepgram WebSocket)
+│   ├── groq_llm.py             # LLM (Groq — active)
+│   ├── gemini_llm.py           # LLM (Google Gemini — alternative)
+│   ├── sarvam_tts.py           # TTS (Sarvam AI — active)
+│   ├── deepgram_tts.py         # TTS (Deepgram Aura — alternative)
+│   ├── elevenlabs_tts.py       # TTS (ElevenLabs — alternative)
+│   └── mongodb.py              # Async MongoDB operations
+└── static/                     # Static files directory
 ```
 
-## Contributing
+## Getting Started
 
-We welcome contributions from the community. If you wish to contribute to this project, please fork the repository and submit a pull request.
+### Prerequisites
+
+- Python 3.10+
+- A Twilio account with a phone number
+- API keys for Deepgram, Groq, and Sarvam AI
+- MongoDB instance (optional — app works without it)
+- ngrok (for local development)
+
+### Installation
+
+```bash
+git clone https://github.com/revolutionarybukhari/ai-calling-agent.git
+cd ai-calling-agent
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Configuration
+
+```bash
+cp .env.example .env
+# Edit .env with your API keys
+```
+
+### Running
+
+```bash
+python app.py
+```
+
+The server starts on `http://localhost:5000`. If `NGROK_AUTH_TOKEN` is set, an ngrok tunnel is automatically created.
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Health check / status |
+| `GET`, `POST` | `/inbound` | Twilio webhook for incoming calls (returns TwiML) |
+| `GET` | `/outbound?phone_number=+1234567890` | Initiate an outbound call |
+| `WS` | `/media-stream` | Bidirectional audio stream (used by Twilio) |
 
 ## Author
 
-- **Syed Husnain Haider Bukhari** - *AI Automation Expert & Data Scientist* - [LinkedIn](https://www.linkedin.com/in/syed-husnain-haider-bukhari/) | [Instagram](https://www.instagram.com/revolutionarybukhari/)
+**Syed Husnain Haider Bukhari** — [LinkedIn](https://www.linkedin.com/in/syed-husnain-haider-bukhari/) | [Instagram](https://www.instagram.com/revolutionarybukhari/)
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
-
-## Acknowledgments
-
-- Thanks to Twilio, OpenAI, Pinecone, and MongoDB for providing the technologies that power this project.
-# Calling-Agent
+MIT License — see [LICENSE.md](LICENSE.md) for details.
