@@ -1,94 +1,152 @@
-from pymongo import MongoClient
+"""
+MongoDB operations with async support via motor.
+Uses lazy initialization so the app can start without a MongoDB URI.
+"""
+
+from motor.motor_asyncio import AsyncIOMotorClient
 from config import MONGODB_URI
 
-client = MongoClient(MONGODB_URI)
-db = client.Cluster0
-# Collection Definitions
-users_collection = db.users
-session_logs_collection = db.session_logs
-therapy_progress_collection = db.therapy_progress
-appointments_collection = db.appointments
-chat_history_collection = db.chat_history
+# Lazy MongoDB connection — only connect when URI is configured
+_client = None
+_db = None
 
-# User operations
-def add_user(user_data):
-    return users_collection.insert_one(user_data).inserted_id
 
-def get_user(user_id):
-    return users_collection.find_one({"_id": user_id})
+def _get_db():
+    """Get the database instance, initializing the connection if needed."""
+    global _client, _db
+    if _db is None:
+        if not MONGODB_URI:
+            return None
+        _client = AsyncIOMotorClient(MONGODB_URI)
+        _db = _client.Cluster0
+    return _db
 
-def update_user(user_id, update_data):
-    users_collection.update_one({"_id": user_id}, {"$set": update_data})
 
-def get_userid_by_phone(phone):
-    return users_collection.find_one({"phone": phone})['_id']
+def _get_collection(name: str):
+    """Get a collection by name, or None if DB is not configured."""
+    db = _get_db()
+    if db is None:
+        return None
+    return db[name]
 
-def verify_user(phone):
-    return users_collection.find_one({"phone": phone}) is not None
 
-def has_interacted_before(phone):
-    user = users_collection.find_one({"phone": phone})
-    if user is not None:
-        return user.get('has_interacted_before', False)
+# ─── User Operations ──────────────────────────────────────────────
+
+async def get_user_by_phone(phone: str):
+    """Find a user by phone number."""
+    col = _get_collection("users")
+    if col is None:
+        return None
+    return await col.find_one({"phone": phone})
+
+
+async def get_userid_by_phone(phone: str):
+    """Get user ID from phone number."""
+    col = _get_collection("users")
+    if col is None:
+        return None
+    user = await col.find_one({"phone": phone})
+    if user:
+        return user["_id"]
+    return None
+
+
+async def add_user(user_data: dict):
+    """Create a new user."""
+    col = _get_collection("users")
+    if col is None:
+        return None
+    result = await col.insert_one(user_data)
+    return result.inserted_id
+
+
+async def has_interacted_before(phone: str) -> bool:
+    """Check if a user has had a previous interaction."""
+    col = _get_collection("users")
+    if col is None:
+        return False
+    user = await col.find_one({"phone": phone})
+    if user:
+        return user.get("has_interacted_before", False)
     return False
 
-def set_interacted_before(phone):
-    users_collection.update_one({"phone": phone}, {"$set": {"has_interacted_before": True}})
-    return True
 
-
-# Session logs operations
-def add_session_log(session_data):
-    return session_logs_collection.insert_one(session_data).inserted_id
-
-def get_session_logs(user_id):
-    return list(session_logs_collection.find({"user_id": user_id}))
-
-# Therapy progress operations
-def add_therapy_progress(progress_data):
-    return therapy_progress_collection.insert_one(progress_data).inserted_id
-
-def get_therapy_progress(user_id):
-    return list(therapy_progress_collection.find({"user_id": user_id}))
-
-def update_therapy_progress(progress_id, update_data):
-    therapy_progress_collection.update_one({"_id": progress_id}, {"$set": update_data})
-
-# Appointment operations
-def book_appointment(userid,appointment_data):
-    return appointments_collection.insert_one({"user_id":userid},{"appointment_data":appointment_data})
-
-def get_appointments(user_id):
-    return list(appointments_collection.find({"user_id": user_id}))
-
-def update_appointment(appointment_id, update_data):
-    appointments_collection.update_one({"_id": appointment_id}, {"$set": update_data})
-
-def delete_appointment(appointment_id):
-    appointments_collection.delete_one({"_id": appointment_id})
-
-# Chat history operations
-def set_chat_history(user_id, message_data):
-    """
-    Creates a new chat history record or updates an existing one for a user.
-    """
-    chat_history_collection.update_one(
-        {"user_id": user_id},
-        {"$push": {"messages": {"$each": message_data}}},  # Using $each to add all elements
-        upsert=True
+async def set_interacted_before(phone: str):
+    """Mark a user as having interacted."""
+    col = _get_collection("users")
+    if col is None:
+        return
+    await col.update_one(
+        {"phone": phone},
+        {"$set": {"has_interacted_before": True}},
+        upsert=True,
     )
 
-def get_chat_history(user_id):
-    """
-    Retrieves the chat history for a specific user.
-    """
-    return chat_history_collection.find_one({"user_id": user_id})
 
-def update_chat_history(user_id, update_data):
-    """
-    Updates the chat history record for a specific user.
-    """
-    chat_history_collection.update_one(
-        {"user_id": user_id},
-        {"$set": update_data}
+# ─── Chat History Operations ─────────────────────────────────────
+
+async def get_chat_history(user_phone: str) -> list:
+    """Retrieve chat history for a user by phone number."""
+    col = _get_collection("chat_history")
+    if col is None:
+        return []
+    record = await col.find_one({"phone": user_phone})
+    if record and "messages" in record:
+        return record["messages"]
+    return []
+
+
+async def save_chat_history(user_phone: str, messages: list):
+    """Save or update the full chat history for a user."""
+    col = _get_collection("chat_history")
+    if col is None:
+        return
+    await col.update_one(
+        {"phone": user_phone},
+        {"$set": {"messages": messages}},
+        upsert=True,
     )
+
+
+async def append_to_chat_history(user_phone: str, role: str, content: str):
+    """Append a single message to a user's chat history."""
+    col = _get_collection("chat_history")
+    if col is None:
+        return
+    await col.update_one(
+        {"phone": user_phone},
+        {"$push": {"messages": {"role": role, "content": content}}},
+        upsert=True,
+    )
+
+
+# ─── Call Log Operations ─────────────────────────────────────────
+
+async def save_call_log(call_data: dict):
+    """Save metadata about a call (duration, direction, etc.)."""
+    col = _get_collection("call_logs")
+    if col is None:
+        return None
+    result = await col.insert_one(call_data)
+    return result.inserted_id
+
+
+# ─── Appointment Operations ──────────────────────────────────────
+
+async def book_appointment(user_phone: str, appointment_data: dict):
+    """Book a new appointment."""
+    col = _get_collection("appointments")
+    if col is None:
+        return None
+    appointment_data["phone"] = user_phone
+    result = await col.insert_one(appointment_data)
+    return result.inserted_id
+
+
+async def get_appointments(user_phone: str):
+    """Get all appointments for a user."""
+    col = _get_collection("appointments")
+    if col is None:
+        return []
+    cursor = col.find({"phone": user_phone})
+    return await cursor.to_list(length=100)

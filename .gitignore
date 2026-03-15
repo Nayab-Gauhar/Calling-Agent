@@ -51,3 +51,7 @@ Thumbs.db
 
 *.ipynb
 
+# Environment variables
+.env
+venv/
+
