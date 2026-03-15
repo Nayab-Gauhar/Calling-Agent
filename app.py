@@ -7,6 +7,7 @@ for human-like, low-latency phone conversations with barge-in support.
 import json
 import base64
 import asyncio
+import random
 import time
 from datetime import datetime, timezone
 
@@ -40,6 +41,27 @@ twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 # Serve static files (for any pre-recorded audio like greetings)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# ─── Filler sounds to fill dead air while LLM is thinking ────────
+# These are short Hindi conversational fillers that a real person would say
+# while processing what the caller said. Sent to TTS immediately before LLM
+# starts generating, so the caller hears something within ~200ms.
+FILLERS = [
+    "हम्म",
+    "हाँ",
+    "अच्छा",
+    "जी",
+    "सही",
+    "हाँ हाँ",
+    "ओह",
+    "अरे",
+    "हम्म, देखो",
+    "अच्छा अच्छा",
+]
+
+# Greeting sent through our own TTS pipeline when the call starts.
+# This replaces the robotic Twilio Polly greeting.
+INITIAL_GREETING = "हेलो! कैसे हो? बोलो, क्या बात है?"
 
 # ─── Dynamic ngrok URL (set at startup if auto-tunnel is used) ───
 _ngrok_domain = NGROK_URL  # Will be overridden if ngrok auto-starts
@@ -75,14 +97,8 @@ async def inbound_call(request: Request):
     """
     response = VoiceResponse()
 
-    # Greet the caller briefly to minimize delay
-    response.say(
-        "Hi there! How can I help you?",
-        voice="Polly.Joanna",
-    )
-    response.pause(length=1)
-
-    # Connect to bidirectional media stream
+    # Connect to bidirectional media stream immediately — no Polly greeting.
+    # Our own TTS pipeline sends a natural Hindi greeting once the stream starts.
     connect = Connect()
     stream = connect.stream(
         url=f"wss://{get_ngrok_url()}/media-stream",
@@ -110,8 +126,6 @@ async def outbound_call(phone_number: str):
 
     twiml = f"""
     <Response>
-        <Say voice="Polly.Joanna">Hi there! How can I help you today?</Say>
-        <Pause length="1"/>
         <Connect>
             <Stream url="wss://{get_ngrok_url()}/media-stream">
                 <Parameter name="caller_number" value="{phone_number}"/>
@@ -204,7 +218,7 @@ async def media_stream(websocket: WebSocket):
 
     # ── Process a transcript through the full pipeline ──
     async def process_transcript(transcript: str):
-        """Process transcript through LLM → TTS → Twilio pipeline."""
+        """Process transcript through filler → LLM → TTS → Twilio pipeline."""
         nonlocal cancel_event
 
         pipeline_start = time.time()
@@ -213,6 +227,17 @@ async def media_stream(websocket: WebSocket):
         try:
             # Save user message to MongoDB
             await append_to_chat_history(caller_number, "user", transcript)
+
+            # ── INSTANT FILLER: Send a short filler to TTS immediately ──
+            # This fills the dead air while the LLM is thinking (~300-500ms)
+            # so the caller hears "हम्म" or "हाँ" instead of silence.
+            filler = random.choice(FILLERS)
+            print(f"[Pipeline] Sending filler: {filler}")
+            await tts.send_text(filler)
+            await tts.flush()
+
+            if cancel_event.is_set():
+                return
 
             # Stream LLM response → TTS
             full_response = ""
@@ -323,6 +348,15 @@ async def media_stream(websocket: WebSocket):
                 if history:
                     llm.set_history(history[-10:])  # Last 10 messages for context
                     print(f"[MongoDB] Loaded {len(history)} history messages")
+
+                # Send initial greeting through our own TTS pipeline
+                # (replaces the robotic Twilio Polly.Joanna greeting)
+                print(f"[Pipeline] Sending initial greeting via TTS")
+                await tts.send_text(INITIAL_GREETING)
+                await tts.flush()
+                # Add greeting to LLM history so it knows what it said
+                llm.add_message("assistant", INITIAL_GREETING)
+                await append_to_chat_history(caller_number, "assistant", INITIAL_GREETING)
 
             elif event == "media":
                 # Forward raw audio to Deepgram

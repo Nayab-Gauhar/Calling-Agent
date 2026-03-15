@@ -64,10 +64,11 @@ class SarvamTTS:
                 "data": {
                     "target_language_code": self.language,
                     "speaker": self.speaker,
-                    "pace": 1.1,
+                    "pace": 1.15,
+                    "temperature": 0.75,
                     "speech_sample_rate": "8000",
                     "output_audio_codec": "mulaw",
-                    "min_buffer_size": 30,
+                    "min_buffer_size": 20,
                     "max_chunk_length": 150,
                 },
             }

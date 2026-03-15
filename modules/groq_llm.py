@@ -23,7 +23,7 @@ MIN_CHUNK_SIZE = 6
 class GroqLLM:
     """Manages conversation history and streams responses from Groq."""
 
-    def __init__(self, model=None, max_tokens=None, temperature=0.7):
+    def __init__(self, model=None, max_tokens=None, temperature=0.85):
         self.model_name = model or GROQ_MODEL
         self.max_tokens = max_tokens or LLM_MAX_TOKENS
         self.temperature = temperature
