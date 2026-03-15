@@ -59,13 +59,15 @@ class SarvamTTS:
             self._connected = True
 
             # Send configuration message
+            # NOTE: The WS API does NOT support 'temperature' — that's HTTP-only.
+            # Supported config keys: target_language_code, speaker, pace,
+            # speech_sample_rate, output_audio_codec, min_buffer_size, max_chunk_length.
             config_msg = {
                 "type": "config",
                 "data": {
                     "target_language_code": self.language,
                     "speaker": self.speaker,
                     "pace": 1.15,
-                    "temperature": 0.75,
                     "speech_sample_rate": "8000",
                     "output_audio_codec": "mulaw",
                     "min_buffer_size": 20,
@@ -76,6 +78,12 @@ class SarvamTTS:
 
             # Start background listener for audio chunks
             self._listener_task = asyncio.create_task(self._listen_loop())
+
+            # Brief wait to catch immediate config errors from the server
+            await asyncio.sleep(0.15)
+            if not self._connected:
+                raise RuntimeError("Sarvam TTS config was rejected — check parameters")
+
             print("[Sarvam TTS] WebSocket connected and configured")
 
         except Exception as e:
@@ -133,6 +141,9 @@ class SarvamTTS:
                 elif msg_type == "error":
                     err = data.get("data", {}).get("message", "unknown")
                     print(f"[Sarvam TTS] Server error: {err}")
+                    # Config rejection or fatal error — mark connection as unusable
+                    self._connected = False
+                    self._flush_event.set()  # Unblock any pending flush
 
         except websockets.ConnectionClosed:
             print("[Sarvam TTS] WebSocket closed")
