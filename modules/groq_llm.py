@@ -72,11 +72,13 @@ class GroqLLM:
 
             full_response = ""
             buffer = ""
+            was_cancelled = False
 
             async for chunk in response:
                 # Check for barge-in cancellation
                 if cancel_event and cancel_event.is_set():
                     print("[Groq] Generation cancelled (barge-in)")
+                    was_cancelled = True
                     break
 
                 if chunk.choices and chunk.choices[0].delta.content:
@@ -92,14 +94,26 @@ class GroqLLM:
                         yield buffer
                         buffer = ""
 
-            # Yield any remaining text in the buffer
-            if buffer.strip():
+                    # Safety: flush if buffer gets very long without punctuation
+                    elif len(buffer) >= 80:
+                        yield buffer
+                        buffer = ""
+
+            # Yield any remaining text in the buffer (only if not cancelled)
+            if buffer.strip() and not was_cancelled:
                 yield buffer
 
-            # Save the full response to history
-            if full_response:
+            # Save the full response to history — ONLY if complete (not cancelled)
+            # Partial responses from barge-in would corrupt future LLM context.
+            if full_response and not was_cancelled:
                 self.add_message("assistant", full_response)
                 print(f"[Groq] Response ({len(full_response)} chars): {full_response[:80]}...")
+            elif was_cancelled and full_response:
+                # Remove the user message we added at the start since the response
+                # was interrupted — prevents orphaned user messages without replies
+                if self.conversation_history and self.conversation_history[-1].get("role") == "user":
+                    self.conversation_history.pop()
+                print(f"[Groq] Discarded partial response ({len(full_response)} chars) due to barge-in")
 
         except Exception as e:
             print(f"[Groq] Error streaming response: {e}")

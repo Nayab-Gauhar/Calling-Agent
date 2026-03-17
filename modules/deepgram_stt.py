@@ -38,6 +38,7 @@ class DeepgramSTT:
         self.channels = channels
         self.ws = None
         self._listen_task = None
+        self._reconnect_task = None
         self._connected = False
         self._reconnect_attempts = 0
 
@@ -99,7 +100,9 @@ class DeepgramSTT:
                 await self.ws.send(audio_bytes)
             except websockets.exceptions.ConnectionClosed:
                 self._connected = False
-                asyncio.create_task(self._reconnect())
+                # Track reconnect task to prevent concurrent attempts
+                if not self._reconnect_task or self._reconnect_task.done():
+                    self._reconnect_task = asyncio.create_task(self._reconnect())
 
     async def _listen(self):
         """Listen for transcript results from Deepgram."""
@@ -124,13 +127,15 @@ class DeepgramSTT:
         except websockets.exceptions.ConnectionClosed:
             print("[Deepgram] Connection closed")
             self._connected = False
-            await self._reconnect()
+            if not self._reconnect_task or self._reconnect_task.done():
+                self._reconnect_task = asyncio.create_task(self._reconnect())
         except asyncio.CancelledError:
             pass
         except Exception as e:
             print(f"[Deepgram] Error in listener: {e}")
             self._connected = False
-            await self._reconnect()
+            if not self._reconnect_task or self._reconnect_task.done():
+                self._reconnect_task = asyncio.create_task(self._reconnect())
 
     async def _reconnect(self):
         """Attempt to reconnect to Deepgram with exponential backoff."""

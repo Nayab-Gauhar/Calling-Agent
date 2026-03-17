@@ -10,6 +10,7 @@ import asyncio
 import random
 import time
 from datetime import datetime, timezone
+from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -35,6 +36,7 @@ from modules.mongodb import (
     append_to_chat_history,
     save_call_log,
 )
+from modules.telegram import send_call_summary
 
 app = FastAPI(title="AI Calling Agent", version="2.0.0")
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -124,11 +126,12 @@ async def outbound_call(phone_number: str):
     if not phone_number:
         return JSONResponse({"error": "phone_number is required"}, status_code=400)
 
+    safe_number = xml_escape(phone_number, {'"': "&quot;"})
     twiml = f"""
     <Response>
         <Connect>
             <Stream url="wss://{get_ngrok_url()}/media-stream">
-                <Parameter name="caller_number" value="{phone_number}"/>
+                <Parameter name="caller_number" value="{safe_number}"/>
                 <Parameter name="call_direction" value="outbound"/>
             </Stream>
         </Connect>
@@ -298,11 +301,14 @@ async def media_stream(websocket: WebSocket):
                 except Exception:
                     pass
 
-            # 3. Wait for old task to finish cleanup
+            # 3. Cancel the task and WAIT for it to actually finish
+            #    (prevents two concurrent pipelines sending interleaved audio)
+            current_processing_task.cancel()
             try:
-                current_processing_task.cancel()
-                await asyncio.shield(asyncio.sleep(0.05))
-            except Exception:
+                await asyncio.wait_for(
+                    asyncio.shield(current_processing_task), timeout=1.0
+                )
+            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                 pass
 
             # 4. Clear and reconnect TTS to discard queued audio
@@ -365,8 +371,9 @@ async def media_stream(websocket: WebSocket):
                 await stt.send_audio(audio_bytes)
 
             elif event == "mark":
-                # Track audio playback completion (useful for future enhancements)
-                pass
+                # Clean up completed marks to prevent unbounded growth
+                mark_name = data.get("mark", {}).get("name")
+                mark_queue.pop(mark_name, None)
 
             elif event == "stop":
                 print("[Twilio] Media stream stopped")
@@ -401,6 +408,19 @@ async def media_stream(websocket: WebSocket):
         history = llm.get_history()
         if history:
             await save_chat_history(caller_number, history)
+
+        # Send call summary to Telegram
+        call_duration = (call_end_time - call_start_time).total_seconds()
+        try:
+            await send_call_summary(
+                caller_number=caller_number,
+                direction=call_direction,
+                stream_sid=stream_sid,
+                duration_seconds=call_duration,
+                conversation=history or [],
+            )
+        except Exception as e:
+            print(f"[Telegram] Failed to send call summary: {e}")
 
         print("[WebSocket] Session cleaned up")
 

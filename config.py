@@ -29,6 +29,10 @@ ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "EXAVITQu4vr4xnSDxMaL")
 # Sarvam AI TTS
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 
+# Telegram Bot (call notifications)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
 # MongoDB
 MONGODB_URI = os.getenv("MONGODB_URI", "")
 

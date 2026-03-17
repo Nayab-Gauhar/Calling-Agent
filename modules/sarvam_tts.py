@@ -8,7 +8,7 @@ decoding step needed.
 Key advantages over the HTTP streaming endpoint:
   - Persistent WebSocket (no per-request TCP/TLS overhead)
   - Native mulaw 8kHz output (no MP3→PCM→mulaw conversion)
-  - Server-side text buffering with min_buffer_size / max_chunk_length
+   - Server-side text buffering
   - Flush + completion events for clean end-of-utterance handling
 """
 
@@ -59,9 +59,9 @@ class SarvamTTS:
             self._connected = True
 
             # Send configuration message
-            # NOTE: The WS API does NOT support 'temperature' — that's HTTP-only.
-            # Supported config keys: target_language_code, speaker, pace,
-            # speech_sample_rate, output_audio_codec, min_buffer_size, max_chunk_length.
+            # NOTE: The WS API rejects temperature, min_buffer_size, and
+            # max_chunk_length — all cause HTTP 422.  Only the five params
+            # below are accepted.
             config_msg = {
                 "type": "config",
                 "data": {
@@ -70,8 +70,6 @@ class SarvamTTS:
                     "pace": 1.15,
                     "speech_sample_rate": "8000",
                     "output_audio_codec": "mulaw",
-                    "min_buffer_size": 20,
-                    "max_chunk_length": 150,
                 },
             }
             await self._ws.send(json.dumps(config_msg))
@@ -158,7 +156,7 @@ class SarvamTTS:
     async def send_text(self, text: str):
         """
         Send a text chunk to Sarvam for synthesis.
-        Text is buffered server-side according to min_buffer_size / max_chunk_length.
+        Text is buffered server-side before synthesis begins.
         """
         if self._cancelled or not text.strip() or not self._ws or not self._connected:
             return
