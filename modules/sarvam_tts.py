@@ -29,7 +29,7 @@ TWILIO_CHUNK_SIZE = 4000
 class SarvamTTS:
     """Streams text to Sarvam AI TTS via WebSocket and forwards mulaw audio to Twilio."""
 
-    def __init__(self, on_audio, language="hi-IN", speaker="shreya", model="bulbul:v3"):
+    def __init__(self, on_audio, language="en-IN", speaker="shreya", model="bulbul:v3"):
         """
         Args:
             on_audio: async function called with (audio_base64: str) for each chunk.
@@ -67,7 +67,8 @@ class SarvamTTS:
                 "data": {
                     "target_language_code": self.language,
                     "speaker": self.speaker,
-                    "pace": 1.15,
+                    "pace": 1.0,
+                    "temperature": 0.4,
                     "speech_sample_rate": "8000",
                     "output_audio_codec": "mulaw",
                 },
@@ -158,7 +159,12 @@ class SarvamTTS:
         Send a text chunk to Sarvam for synthesis.
         Text is buffered server-side before synthesis begins.
         """
+        import re
         if self._cancelled or not text.strip() or not self._ws or not self._connected:
+            return
+
+        # Prevent sending purely punctuation/symbols which causes Sarvam 400 errors
+        if not re.search(r'[a-zA-Z\u0900-\u097F0-9]', text):
             return
 
         if self._send_start_time is None:
