@@ -7,7 +7,6 @@ for human-like, low-latency phone conversations with barge-in support.
 import json
 import base64
 import asyncio
-import random
 import time
 from datetime import datetime, timezone
 from xml.sax.saxutils import escape as xml_escape
@@ -25,7 +24,6 @@ from config import (
     NGROK_URL,
     NGROK_AUTH_TOKEN,
     PORT,
-    SYSTEM_PROMPT,
 )
 from modules.deepgram_stt import DeepgramSTT
 from modules.groq_llm import GroqLLM
@@ -43,27 +41,6 @@ twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 # Serve static files (for any pre-recorded audio like greetings)
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# ─── Filler sounds to fill dead air while LLM is thinking ────────
-# These are short Hindi conversational fillers that a real person would say
-# while processing what the caller said. Sent to TTS immediately before LLM
-# starts generating, so the caller hears something within ~200ms.
-FILLERS = [
-    "हम्म",
-    "हाँ",
-    "अच्छा",
-    "जी",
-    "सही",
-    "हाँ हाँ",
-    "ओह",
-    "अरे",
-    "हम्म, देखो",
-    "अच्छा अच्छा",
-]
-
-# Greeting sent through our own TTS pipeline when the call starts.
-# This replaces the robotic Twilio Polly greeting.
-INITIAL_GREETING = "हेलो! कैसे हो? बोलो, क्या बात है?"
 
 # ─── Dynamic ngrok URL (set at startup if auto-tunnel is used) ───
 _ngrok_domain = NGROK_URL  # Will be overridden if ngrok auto-starts
@@ -99,8 +76,8 @@ async def inbound_call(request: Request):
     """
     response = VoiceResponse()
 
-    # Connect to bidirectional media stream immediately — no Polly greeting.
-    # Our own TTS pipeline sends a natural Hindi greeting once the stream starts.
+    # Connect to bidirectional media stream immediately.
+    # The LLM generates the greeting naturally based on system_prompt.txt.
     connect = Connect()
     stream = connect.stream(
         url=f"wss://{get_ngrok_url()}/media-stream",
@@ -217,11 +194,11 @@ async def media_stream(websocket: WebSocket):
                 pass  # WebSocket may have closed
 
     # TTS instance scoped to this session (not global to avoid concurrency issues)
-    tts = SarvamTTS(send_to_twilio, language="hi-IN", speaker="shreya", model="bulbul:v3")
+    tts = SarvamTTS(send_to_twilio, language="en-IN", speaker="shreya", model="bulbul:v3")
 
     # ── Process a transcript through the full pipeline ──
     async def process_transcript(transcript: str):
-        """Process transcript through filler → LLM → TTS → Twilio pipeline."""
+        """Process transcript through LLM → TTS → Twilio pipeline."""
         nonlocal cancel_event
 
         pipeline_start = time.time()
@@ -230,14 +207,6 @@ async def media_stream(websocket: WebSocket):
         try:
             # Save user message to MongoDB
             await append_to_chat_history(caller_number, "user", transcript)
-
-            # ── INSTANT FILLER: Send a short filler to TTS immediately ──
-            # This fills the dead air while the LLM is thinking (~300-500ms)
-            # so the caller hears "हम्म" or "हाँ" instead of silence.
-            filler = random.choice(FILLERS)
-            print(f"[Pipeline] Sending filler: {filler}")
-            await tts.send_text(filler)
-            await tts.flush()
 
             if cancel_event.is_set():
                 return
@@ -285,6 +254,14 @@ async def media_stream(websocket: WebSocket):
 
         # ── Barge-in: If currently processing, cancel and clear ──
         if current_processing_task and not current_processing_task.done():
+            # Filter out very short/accidental barge-ins (e.g. echo of "Hello", coughs, "ok")
+            cleaned_transcript = transcript.strip().lower().replace(".", "").replace("?", "").replace("!", "")
+            ignore_phrases = ["hello", "yeah", "ok", "okay", "yes", "hmm", "hm", "oh", "ha", "haan", "hi"]
+            words = cleaned_transcript.split()
+            if len(words) <= 2 and all(w in ignore_phrases for w in words):
+                print(f"[Barge-in] Ignored short/echo transcript during generation: {transcript}")
+                return
+
             print(f"[Barge-in] Interrupting current response for: {transcript}")
 
             # 1. Signal cancellation to LLM stream
@@ -355,14 +332,19 @@ async def media_stream(websocket: WebSocket):
                     llm.set_history(history[-10:])  # Last 10 messages for context
                     print(f"[MongoDB] Loaded {len(history)} history messages")
 
-                # Send initial greeting through our own TTS pipeline
-                # (replaces the robotic Twilio Polly.Joanna greeting)
-                print(f"[Pipeline] Sending initial greeting via TTS")
-                await tts.send_text(INITIAL_GREETING)
+                # Let the LLM generate the greeting naturally based on system_prompt.txt
+                # stream_greeting() only saves the assistant message to history (no fake user msg)
+                print("[Pipeline] Generating greeting via LLM")
+                greeting = ""
+                async for text_chunk in llm.stream_greeting(cancel_event):
+                    if cancel_event.is_set():
+                        break
+                    await tts.send_text(text_chunk + " ")
+                    greeting += text_chunk
                 await tts.flush()
-                # Add greeting to LLM history so it knows what it said
-                llm.add_message("assistant", INITIAL_GREETING)
-                await append_to_chat_history(caller_number, "assistant", INITIAL_GREETING)
+                if greeting:
+                    await append_to_chat_history(caller_number, "assistant", greeting)
+                    print(f"[Pipeline] Greeting: {greeting[:80]}...")
 
             elif event == "media":
                 # Forward raw audio to Deepgram
@@ -412,13 +394,14 @@ async def media_stream(websocket: WebSocket):
         # Send call summary to Telegram
         call_duration = (call_end_time - call_start_time).total_seconds()
         try:
-            await send_call_summary(
+            sent = await send_call_summary(
                 caller_number=caller_number,
                 direction=call_direction,
                 stream_sid=stream_sid,
                 duration_seconds=call_duration,
                 conversation=history or [],
             )
+            print(f"[Telegram] Call summary sent: {sent} ({len(history or [])} messages)")
         except Exception as e:
             print(f"[Telegram] Failed to send call summary: {e}")
 

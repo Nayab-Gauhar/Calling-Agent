@@ -49,11 +49,13 @@ class DeepgramSTT:
             f"&sample_rate={self.sample_rate}"
             f"&channels={self.channels}"
             f"&language={self.language}"
-            f"&model=nova-2"
+            f"&model=nova-3"
             f"&smart_format=true"
+            f"&filler_words=false"
             f"&punctuate=true"
             f"&interim_results=true"
             f"&endpointing={DEEPGRAM_ENDPOINTING_MS}"
+            f"&utterance_end_ms=1500"
             f"&vad_events=true"
         )
         return DEEPGRAM_WS_URL + params
@@ -105,13 +107,22 @@ class DeepgramSTT:
                     self._reconnect_task = asyncio.create_task(self._reconnect())
 
     async def _listen(self):
-        """Listen for transcript results from Deepgram."""
+        """
+        Listen for transcript results from Deepgram.
+        
+        Strategy: Accumulate is_final transcripts and only dispatch to the
+        callback when speech_final=True OR an UtteranceEnd event arrives.
+        This prevents cutting off Hindi/Hinglish speakers mid-sentence
+        (where pauses between clauses trigger is_final but the person
+        hasn't finished their thought yet).
+        """
+        accumulated = ""
         try:
             async for message in self.ws:
                 data = json.loads(message)
+                msg_type = data.get("type")
 
-                # Handle speech final / utterance end
-                if data.get("type") == "Results":
+                if msg_type == "Results":
                     channel = data.get("channel", {})
                     alternatives = channel.get("alternatives", [])
 
@@ -120,9 +131,24 @@ class DeepgramSTT:
                         is_final = data.get("is_final", False)
                         speech_final = data.get("speech_final", False)
 
-                        if transcript and (is_final or speech_final):
-                            print(f"[Deepgram] Final transcript: {transcript}")
-                            await self.on_transcript(transcript)
+                        if transcript and is_final:
+                            accumulated += (" " + transcript) if accumulated else transcript
+
+                        # speech_final = Deepgram is confident the speaker finished
+                        if speech_final and accumulated.strip():
+                            full = accumulated.strip()
+                            accumulated = ""
+                            print(f"[Deepgram] Final transcript: {full}")
+                            await self.on_transcript(full)
+
+                elif msg_type == "UtteranceEnd":
+                    # Backup: if speech_final didn't fire but silence exceeded
+                    # utterance_end_ms, flush whatever we have
+                    if accumulated.strip():
+                        full = accumulated.strip()
+                        accumulated = ""
+                        print(f"[Deepgram] UtteranceEnd transcript: {full}")
+                        await self.on_transcript(full)
 
         except websockets.exceptions.ConnectionClosed:
             print("[Deepgram] Connection closed")
