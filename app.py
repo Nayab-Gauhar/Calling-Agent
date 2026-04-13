@@ -26,15 +26,15 @@ from config import (
     PORT,
 )
 from modules.deepgram_stt import DeepgramSTT
-from modules.groq_llm import GroqLLM
+from modules.nvidia_llm import GroqLLM
 from modules.sarvam_tts import SarvamTTS
-from modules.mongodb import (
-    get_chat_history,
-    save_chat_history,
-    append_to_chat_history,
-    save_call_log,
-)
 from modules.telegram import send_call_summary
+from modules.call_summary import generate_call_summary
+from modules.google_sheets import (
+    log_call as log_call_to_sheets,
+    get_chat_history,
+    append_to_chat_history,
+)
 
 app = FastAPI(title="AI Calling Agent", version="2.0.0")
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -164,8 +164,8 @@ async def media_stream(websocket: WebSocket):
     # Initialize the LLM with conversation history
     llm = GroqLLM()
 
-    # Queue to map mark names to streamSids for tracking
-    mark_queue = {}
+    # Track the greeting task so barge-in can cancel it
+    greeting_task = None
 
     # ── Callback: When TTS produces audio, send it to Twilio ──
     async def send_to_twilio(b64_audio: str):
@@ -181,20 +181,11 @@ async def media_stream(websocket: WebSocket):
                     },
                 }
                 await websocket.send_json(message)
-
-                # Add Twilio Mark event so we know when playout finishes vs barge-in
-                mark_name = f"mark_{int(time.time() * 1000)}"
-                mark_queue[mark_name] = stream_sid # Store stream_sid with mark_name
-                await websocket.send_json({
-                    "event": "mark",
-                    "streamSid": stream_sid, # Use the main stream_sid
-                    "mark": {"name": mark_name}
-                })
             except Exception:
                 pass  # WebSocket may have closed
 
     # TTS instance scoped to this session (not global to avoid concurrency issues)
-    tts = SarvamTTS(send_to_twilio, language="en-IN", speaker="shreya", model="bulbul:v3")
+    tts = SarvamTTS(send_to_twilio, language="en-IN", speaker="priya", model="bulbul:v3")
 
     # ── Process a transcript through the full pipeline ──
     async def process_transcript(transcript: str):
@@ -227,6 +218,13 @@ async def media_stream(websocket: WebSocket):
                 await tts.send_text(text_chunk + " ")
                 full_response += text_chunk
 
+                # Flush at sentence boundaries for lower first-audio latency.
+                # Only in WebSocket mode — in REST fallback, batching into one
+                # call is faster than multiple 5-8s REST calls per sentence.
+                last_char = text_chunk.rstrip()[-1:]
+                if last_char in {'.', '!', '?', '।'} and not tts._use_rest:
+                    await tts.flush()
+
             if cancel_event.is_set():
                 return
 
@@ -247,13 +245,14 @@ async def media_stream(websocket: WebSocket):
     # ── Callback: When Deepgram produces a transcript, process it ──
     async def on_transcript(transcript: str):
         """Handle a final transcript — supports barge-in."""
-        nonlocal current_processing_task, cancel_event, stream_sid
+        nonlocal current_processing_task, cancel_event, stream_sid, greeting_task
 
         if not transcript.strip():
             return
 
-        # ── Barge-in: If currently processing, cancel and clear ──
-        if current_processing_task and not current_processing_task.done():
+        # ── Barge-in: cancel greeting or active pipeline ──
+        active_task = greeting_task if (greeting_task and not greeting_task.done()) else current_processing_task
+        if active_task and not active_task.done():
             # Filter out very short/accidental barge-ins (e.g. echo of "Hello", coughs, "ok")
             cleaned_transcript = transcript.strip().lower().replace(".", "").replace("?", "").replace("!", "")
             ignore_phrases = ["hello", "yeah", "ok", "okay", "yes", "hmm", "hm", "oh", "ha", "haan", "hi"]
@@ -280,13 +279,17 @@ async def media_stream(websocket: WebSocket):
 
             # 3. Cancel the task and WAIT for it to actually finish
             #    (prevents two concurrent pipelines sending interleaved audio)
-            current_processing_task.cancel()
+            active_task.cancel()
             try:
                 await asyncio.wait_for(
-                    asyncio.shield(current_processing_task), timeout=1.0
+                    asyncio.shield(active_task), timeout=1.0
                 )
             except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
                 pass
+
+            # Clear greeting ref if that's what we interrupted
+            if active_task is greeting_task:
+                greeting_task = None
 
             # 4. Clear and reconnect TTS to discard queued audio
             await tts.clear_and_reconnect()
@@ -330,21 +333,31 @@ async def media_stream(websocket: WebSocket):
                 history = await get_chat_history(caller_number)
                 if history:
                     llm.set_history(history[-10:])  # Last 10 messages for context
-                    print(f"[MongoDB] Loaded {len(history)} history messages")
+                    print(f"[Google Sheets] Loaded {len(history)} history messages")
 
-                # Let the LLM generate the greeting naturally based on system_prompt.txt
-                # stream_greeting() only saves the assistant message to history (no fake user msg)
-                print("[Pipeline] Generating greeting via LLM")
-                greeting = ""
-                async for text_chunk in llm.stream_greeting(cancel_event):
-                    if cancel_event.is_set():
-                        break
-                    await tts.send_text(text_chunk + " ")
-                    greeting += text_chunk
-                await tts.flush()
-                if greeting:
-                    await append_to_chat_history(caller_number, "assistant", greeting)
-                    print(f"[Pipeline] Greeting: {greeting[:80]}...")
+                # Generate greeting in a background task so the message loop
+                # keeps processing audio immediately (prevents buffering caller's
+                # early speech while the LLM generates the greeting).
+                async def _generate_greeting():
+                    try:
+                        print("[Pipeline] Generating greeting via LLM")
+                        greet = ""
+                        async for text_chunk in llm.stream_greeting(cancel_event):
+                            if cancel_event.is_set():
+                                break
+                            await tts.send_text(text_chunk + " ")
+                            greet += text_chunk
+                        if not cancel_event.is_set():
+                            await tts.flush()
+                        if greet:
+                            await append_to_chat_history(caller_number, "assistant", greet)
+                            print(f"[Pipeline] Greeting: {greet[:80]}...")
+                    except asyncio.CancelledError:
+                        print("[Pipeline] Greeting cancelled (barge-in)")
+                    except Exception as e:
+                        print(f"[Pipeline] Greeting error: {e}")
+
+                greeting_task = asyncio.create_task(_generate_greeting())
 
             elif event == "media":
                 # Forward raw audio to Deepgram
@@ -353,9 +366,7 @@ async def media_stream(websocket: WebSocket):
                 await stt.send_audio(audio_bytes)
 
             elif event == "mark":
-                # Clean up completed marks to prevent unbounded growth
-                mark_name = data.get("mark", {}).get("name")
-                mark_queue.pop(mark_name, None)
+                pass  # Mark events not currently used
 
             elif event == "stop":
                 print("[Twilio] Media stream stopped")
@@ -367,32 +378,41 @@ async def media_stream(websocket: WebSocket):
         print(f"[WebSocket] Error: {e}")
     finally:
         # Cancel any in-progress processing
-        if current_processing_task and not current_processing_task.done():
-            cancel_event.set()
-            current_processing_task.cancel()
+        cancel_event.set()
+        for task in [greeting_task, current_processing_task]:
+            if task and not task.done():
+                task.cancel()
 
         # Cleanup
         await stt.close()
         await tts.close()
 
-        # Save call log
+        # Gather call data
         call_end_time = datetime.now(timezone.utc)
-        await save_call_log({
-            "caller_number": caller_number,
-            "direction": call_direction,
-            "stream_sid": stream_sid,
-            "start_time": call_start_time,
-            "end_time": call_end_time,
-            "duration_seconds": (call_end_time - call_start_time).total_seconds(),
-        })
-
-        # Save final conversation history
         history = llm.get_history()
-        if history:
-            await save_chat_history(caller_number, history)
 
         # Send call summary to Telegram
         call_duration = (call_end_time - call_start_time).total_seconds()
+
+        # Generate AI summary using NVIDIA LLM
+        ai_summary = None
+        try:
+            ai_summary = await generate_call_summary(history or [])
+        except Exception as e:
+            print(f"[Summary] Failed: {e}")
+
+        # Log to Google Sheets
+        try:
+            await log_call_to_sheets(
+                caller_number=caller_number,
+                direction=call_direction,
+                duration_seconds=call_duration,
+                summary=ai_summary,
+            )
+        except Exception as e:
+            print(f"[Google Sheets] Failed: {e}")
+
+        # Send to Telegram
         try:
             sent = await send_call_summary(
                 caller_number=caller_number,

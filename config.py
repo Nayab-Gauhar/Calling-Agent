@@ -24,7 +24,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 # Deepgram
 DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY", "")
 DEEPGRAM_ENDPOINTING_MS = int(os.getenv("DEEPGRAM_ENDPOINTING_MS", "500"))
-DEEPGRAM_LANGUAGE = os.getenv("DEEPGRAM_LANGUAGE", "hi")
+DEEPGRAM_LANGUAGE = os.getenv("DEEPGRAM_LANGUAGE", "multi")
 
 # ElevenLabs TTS (alternative)
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
@@ -37,8 +37,9 @@ SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# MongoDB
-MONGODB_URI = os.getenv("MONGODB_URI", "")
+# Google Sheets (call logging + chat history)
+GOOGLE_SHEETS_CREDS_FILE = os.getenv("GOOGLE_SHEETS_CREDS_FILE", "")
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "")
 
 # Server
 NGROK_URL = os.getenv("NGROK_URL", "")
@@ -46,7 +47,7 @@ NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN", "")
 PORT = int(os.getenv("PORT", "5000"))
 
 # LLM Settings
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "200"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "300"))
 
 _prompt_file = Path(__file__).parent / "system_prompt.txt"
 if _prompt_file.exists():

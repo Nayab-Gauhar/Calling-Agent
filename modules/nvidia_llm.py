@@ -1,30 +1,30 @@
 """
 Streaming LLM wrapper.
-Uses OpenAI SDK pointing to NVIDIA API to stream Llama-3 responses token-by-token
+Uses OpenAI SDK pointing to Groq API to stream Llama-3 responses token-by-token
 and buffers them into small chunks for efficient, low-latency TTS processing.
 Supports cancellation for barge-in.
 """
 
 import asyncio
 from openai import AsyncOpenAI
-from config import NVIDIA_API_KEY, NVIDIA_MODEL, SYSTEM_PROMPT, LLM_MAX_TOKENS
+from config import GROQ_API_KEY, GROQ_MODEL, SYSTEM_PROMPT, LLM_MAX_TOKENS
 
-# Initialize the OpenAI client pointing to NVIDIA API
+# Initialize the OpenAI client pointing to Groq API
 client = AsyncOpenAI(
-    base_url="https://integrate.api.nvidia.com/v1",
-    api_key=NVIDIA_API_KEY
+    base_url="https://api.groq.com/openai/v1",
+    api_key=GROQ_API_KEY
 )
 
 # Characters that indicate a natural pause — good point to flush to TTS.
 FLUSH_CHARS = {'.', '!', '?', ':', ';', ',', '।', '॥', '—', '–'}
-MIN_CHUNK_SIZE = 25
+MIN_CHUNK_SIZE = 12
 
 
 class GroqLLM:
-    """Manages conversation history and streams responses from NVIDIA API."""
+    """Manages conversation history and streams responses from Groq API."""
 
     def __init__(self, model=None, max_tokens=None, temperature=0.7):
-        self.model_name = model or NVIDIA_MODEL
+        self.model_name = model or GROQ_MODEL
         self.max_tokens = max_tokens or LLM_MAX_TOKENS
         self.temperature = temperature
         self.conversation_history = []  # list of {"role": ..., "content": ...}
@@ -63,7 +63,7 @@ class GroqLLM:
 
             async for chunk in response:
                 if cancel_event and cancel_event.is_set():
-                    print("[NVIDIA] Generation cancelled (barge-in)")
+                    print("[Groq] Generation cancelled (barge-in)")
                     was_cancelled = True
                     break
 
@@ -87,14 +87,14 @@ class GroqLLM:
 
             if full_response and not was_cancelled:
                 self.add_message("assistant", full_response)
-                print(f"[NVIDIA] Response ({len(full_response)} chars): {full_response[:80]}...")
+                print(f"[Groq] Response ({len(full_response)} chars): {full_response[:80]}...")
             elif was_cancelled and full_response:
                 if self.conversation_history and self.conversation_history[-1].get("role") == "user":
                     self.conversation_history.pop()
-                print(f"[NVIDIA] Discarded partial response ({len(full_response)} chars) due to barge-in")
+                print(f"[Groq] Discarded partial response ({len(full_response)} chars) due to barge-in")
 
         except Exception as e:
-            print(f"[NVIDIA] Error streaming response: {e}")
+            print(f"[Groq] Error streaming response: {e}")
             error_msg = "Sorry, I didn't quite catch that. Could you say that again?"
             self.add_message("assistant", error_msg)
             yield error_msg
@@ -115,13 +115,18 @@ class GroqLLM:
             messages.extend(self.conversation_history)
             messages.append({
                 "role": "user",
-                "content": "phone call connected — greet and ask their name",
+                "content": (
+                    "The phone call just connected. Deliver your opening line naturally. "
+                    "Since you don't know the caller's name yet, skip the [Name] placeholder "
+                    "and go straight to introducing yourself and asking if it's a good time. "
+                    "Keep it under 2 sentences."
+                ),
             })
 
             response = await client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
-                max_tokens=80,
+                max_tokens=120,
                 temperature=self.temperature,
                 stream=True,
             )
@@ -153,10 +158,10 @@ class GroqLLM:
 
             if full_response:
                 self.add_message("assistant", full_response)
-                print(f"[NVIDIA] Greeting ({len(full_response)} chars): {full_response[:80]}...")
+                print(f"[Groq] Greeting ({len(full_response)} chars): {full_response[:80]}...")
 
         except Exception as e:
-            print(f"[NVIDIA] Error generating greeting: {e}")
-            fallback = "Hey, this is Aria from Auraforge! Could I get your name first?"
+            print(f"[Groq] Error generating greeting: {e}")
+            fallback = "Hi, this is Aanya calling from Trump Tower Noida. Am I speaking with the right person?"
             self.add_message("assistant", fallback)
             yield fallback
