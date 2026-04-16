@@ -15,4 +15,4 @@ python-multipart>=0.0.9
 gspread>=5.10.0
 google-auth>=2.20.0
 openai>=1.14.0
-duckduckgo-search>=5.0.0
+tavily-python>=0.3.0

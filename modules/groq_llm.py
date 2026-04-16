@@ -6,22 +6,35 @@ for efficient, low-latency TTS processing. Supports cancellation for barge-in.
 
 import asyncio
 from groq import AsyncGroq
-from config import GROQ_API_KEY, GROQ_MODEL, SYSTEM_PROMPT, LLM_MAX_TOKENS
-from duckduckgo_search import DDGS
+from config import GROQ_API_KEY, GROQ_MODEL, SYSTEM_PROMPT, LLM_MAX_TOKENS, TAVILY_API_KEY
+from tavily import TavilyClient
 
 # Initialize the Groq client
 client = AsyncGroq(api_key=GROQ_API_KEY)
 
+# Initialize Tavily
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY) if TAVILY_API_KEY else None
+
 def quick_web_search(query: str, max_results: int = 2) -> str:
-    """Performs a quick web search using DuckDuckGo to get real-time info."""
+    """Performs a quick web search using Tavily API to get real-time info."""
+    if not tavily_client:
+        return "Tavily API key is missing. Cannot search."
+        
     try:
-        results = DDGS().text(query, max_results=max_results)
+        response = tavily_client.search(
+            query=query, 
+            search_depth="basic",
+            max_results=max_results,
+            include_answer=False
+        )
+        results = response.get('results', [])
+        
         if not results:
             return "No results found."
         
         formatted_results = []
         for r in results:
-            formatted_results.append(f"Source: {r.get('title', '')} - {r.get('body', '')}")
+            formatted_results.append(f"Source: {r.get('title', '')} - {r.get('content', '')}")
             
         return "\n".join(formatted_results)
     except Exception as e:

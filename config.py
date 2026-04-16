@@ -16,6 +16,9 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 # NVIDIA NIM LLM
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 
+# Tavily Search API
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
+
 # Google Gemini LLM (alternative)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
