@@ -406,9 +406,9 @@ async def media_stream(websocket: WebSocket):
         }
         await save_call_log(call_log_data)
         
-        # Append call log to Google Sheets
+        # Append call log to Google Sheets with extracted data
         try:
-            await append_call_log(call_log_data)
+            await append_call_log(call_log_data, conversation=history)
         except Exception as e:
             print(f"[Google Sheets] Error appending call log: {e}")
 
