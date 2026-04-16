@@ -3,8 +3,8 @@ from google.oauth2.service_account import Credentials
 import asyncio
 from datetime import datetime
 import json
-from groq import AsyncGroq
-from config import GROQ_API_KEY, GROQ_MODEL
+from openai import AsyncOpenAI
+from config import NVIDIA_API_KEY
 
 # Path to the service account JSON
 SERVICE_ACCOUNT_FILE = 'gen-lang-client-0724838448-59787ae79b2c.json'
@@ -18,8 +18,11 @@ SCOPES = [
 # ID of the Google Sheet (extracted from the URL)
 SPREADSHEET_ID = '1LXx0VyxuyKhkqUQRbEG4gQDDUOhyCYVha7BQDUd26jg'
 
-# Initialize the Groq client for data extraction
-groq_client = AsyncGroq(api_key=GROQ_API_KEY)
+# Initialize the OpenAI client pointing to NVIDIA NIM
+nvidia_client = AsyncOpenAI(
+    base_url="https://integrate.api.nvidia.com/v1",
+    api_key=NVIDIA_API_KEY
+)
 
 def get_client():
     credentials = Credentials.from_service_account_file(
@@ -57,17 +60,25 @@ async def extract_health_data_from_transcript(conversation: list) -> dict:
     """
     
     try:
-        response = await groq_client.chat.completions.create(
-            model="llama3-8b-8192", # Using a fast model for extraction
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
+        response = await nvidia_client.chat.completions.create(
+            model="meta/llama3-70b-instruct", # Powerful NVIDIA NIM model
+            messages=[
+                {"role": "system", "content": "You are an expert medical data extractor. You must reply ONLY with a valid JSON object."},
+                {"role": "user", "content": prompt}
+            ],
             temperature=0.0
         )
         
         content = response.choices[0].message.content
+        # sometimes LLMs return JSON inside markdown blocks
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].strip()
+            
         return json.loads(content)
     except Exception as e:
-        print(f"[Google Sheets] Failed to extract data using LLM: {e}")
+        print(f"[Google Sheets] Failed to extract data using NVIDIA NIM: {e}")
         return {}
 
 def _append_call_log(data: dict):

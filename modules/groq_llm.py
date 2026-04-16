@@ -7,9 +7,26 @@ for efficient, low-latency TTS processing. Supports cancellation for barge-in.
 import asyncio
 from groq import AsyncGroq
 from config import GROQ_API_KEY, GROQ_MODEL, SYSTEM_PROMPT, LLM_MAX_TOKENS
+from duckduckgo_search import DDGS
 
 # Initialize the Groq client
 client = AsyncGroq(api_key=GROQ_API_KEY)
+
+def quick_web_search(query: str, max_results: int = 2) -> str:
+    """Performs a quick web search using DuckDuckGo to get real-time info."""
+    try:
+        results = DDGS().text(query, max_results=max_results)
+        if not results:
+            return "No results found."
+        
+        formatted_results = []
+        for r in results:
+            formatted_results.append(f"Source: {r.get('title', '')} - {r.get('body', '')}")
+            
+        return "\n".join(formatted_results)
+    except Exception as e:
+        print(f"[Web Search] Error: {e}")
+        return "Search failed."
 
 # Characters that indicate a natural pause — good point to flush to TTS.
 # Includes Hindi danda (।) and double-danda (॥) which are sentence terminators,
@@ -56,6 +73,27 @@ class GroqLLM:
         Yields:
             str: Text chunks (roughly clause/sentence-sized).
         """
+        
+        # ─── LIVE WEB SEARCH LOGIC (HACKATHON) ───
+        # If the user asks for a "nearest hospital", "doctor", or a specific location 
+        # we do a quick intercept to fetch real-world data and inject it into the prompt.
+        search_triggers = ["hospital", "clinic", "doctor", "nearest", "naukri", "aspatal", "doctor", "nursng home", "kahan"]
+        if any(trigger in user_message.lower() for trigger in search_triggers):
+            print(f"[Groq] Detected search intent for: {user_message}")
+            try:
+                # Run the synchronous duckduckgo search in a background thread to avoid blocking
+                loop = asyncio.get_running_loop()
+                search_query = f"{user_message} nearest doctor clinic hospital" 
+                # Keep it simple: Just pass the user's message as part of the query
+                search_results = await loop.run_in_executor(None, quick_web_search, search_query)
+                
+                # Inject a hidden system message so the LLM uses this data
+                if "Search failed" not in search_results and "No results" not in search_results:
+                    self.add_message("system", f"LIVE WEB SEARCH RESULTS (Use this to answer the user's question about location/doctors. Keep it very short!):\n{search_results}")
+                    print(f"[Web Search] Injected results: {search_results[:100]}...")
+            except Exception as e:
+                print(f"[Web Search] Async error: {e}")
+
         self.add_message("user", user_message)
 
         try:
