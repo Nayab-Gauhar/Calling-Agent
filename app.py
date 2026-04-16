@@ -37,6 +37,7 @@ from modules.mongodb import (
     save_call_log,
 )
 from modules.telegram import send_call_summary
+from modules.google_sheets import append_call_log
 
 app = FastAPI(title="AI Calling Agent", version="2.0.0")
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -395,14 +396,21 @@ async def media_stream(websocket: WebSocket):
 
         # Save call log
         call_end_time = datetime.now(timezone.utc)
-        await save_call_log({
+        call_log_data = {
             "caller_number": caller_number,
             "direction": call_direction,
             "stream_sid": stream_sid,
             "start_time": call_start_time,
             "end_time": call_end_time,
             "duration_seconds": (call_end_time - call_start_time).total_seconds(),
-        })
+        }
+        await save_call_log(call_log_data)
+        
+        # Append call log to Google Sheets
+        try:
+            await append_call_log(call_log_data)
+        except Exception as e:
+            print(f"[Google Sheets] Error appending call log: {e}")
 
         # Save final conversation history
         history = llm.get_history()

@@ -12,3 +12,5 @@ python-multipart>=0.0.9
 # Alternative providers (uncomment if needed)
 # google-genai>=1.0.0
 # deepgram-sdk>=3.0.0
+gspread>=5.10.0
+google-auth>=2.20.0
